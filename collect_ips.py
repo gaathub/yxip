@@ -9,7 +9,7 @@ import time
 # 目标URL列表
 urls = [
     'https://ip.164746.xyz',
-    'https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestCF/bestcfv4.txt',
+    'https://ZxZDpi.mcsslk.xyz/5132767923ac736c3ae200a581a595af',
     'https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/main/ipTop10.html',
     'https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestProxy/bestproxy%26country.txt',
     'https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestGC/bestgcv4.txt'
