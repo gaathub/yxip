@@ -2,14 +2,17 @@ import requests
 import re
 import os
 from bs4 import BeautifulSoup
+import threading
+import concurrent.futures
+import time
 
 # 目标URL列表
 urls = [
     'https://ip.164746.xyz',
-    'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt',
-    'https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html',
-    'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestProxy/bestproxy%26country.txt',
-    'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestGC/bestgcv4.txt'
+    'https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestCF/bestcfv4.txt',
+    'https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/main/ipTop10.html',
+    'https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestProxy/bestproxy%26country.txt',
+    'https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestGC/bestgcv4.txt'
 ]
 
 # 正则表达式用于匹配IP地址
@@ -20,64 +23,93 @@ headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0 Safari/537.36'
 }
 
-# 如果ip.txt存在，则删除它
+# 删除旧IP文件
 if os.path.exists('ip.txt'):
     os.remove('ip.txt')
 
 # 使用 set 去重存储IP
 ip_set = set()
+lock = threading.Lock()
 
 def extract_ips_from_text(text):
     return re.findall(ip_pattern, text)
 
-def process_html(content):
-    soup = BeautifulSoup(content, 'html.parser')
-    elements = soup.find_all('tr')  # 只在HTML页面中查找<tr>
-    for element in elements:
-        text = element.get_text()
-        ips = extract_ips_from_text(text)
-        ip_set.update(ips)
+def process_url(url):
+    try:
+        print(f"正在抓取: {url}")
+        response = requests.get(url, headers=headers, timeout=25)
+        response.raise_for_status()
+        
+        if 'text/html' in response.headers.get('Content-Type', ''):
+            soup = BeautifulSoup(response.text, 'html.parser')
+            text_content = soup.get_text()
+        else:
+            text_content = response.text
+            
+        ips = extract_ips_from_text(text_content)
+        
+        # 使用线程锁确保线程安全
+        with lock:
+            ip_set.update(ips)
+            
+        print(f"{url} 提取到 {len(ips)} 个IP")
+        return len(ips)
+    except Exception as e:
+        print(f"处理 {url} 时出错: {e}")
+        return 0
 
 def get_ip_location(ip):
+    """使用线程安全的IP位置查询函数"""
     try:
         response = requests.get(f'https://ipinfo.io/{ip}/json', timeout=10)
         response.raise_for_status()
         data = response.json()
-        country = data.get('country', 'Unknown')
-        return country
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP 错误: {e}")
-        return 'Unknown'
-    except requests.exceptions.RequestException as e:
-        print(f"请求失败: {e}")
-        return 'Unknown'
-    except Exception as e:
-        print(f"其他错误: {e}")
-        return 'Unknown'
+        return ip, data.get('country', 'Unknown')
+    except Exception:
+        return ip, 'Unknown'
 
-for url in urls:
-    try:
-        print(f"正在抓取: {url}")
-        response = requests.get(url, headers=headers, timeout=30)  # 增加超时时间
-        response.raise_for_status()
+def main():
+    start_time = time.time()
+    total_ips = 0
+    
+    # 使用线程池并发处理URL
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(process_url, urls)
+        total_ips = sum(results)
+    
+    print(f"初步抓取完成，共找到 {len(ip_set)} 个唯一IP，原始IP数: {total_ips}")
+    
+    # 使用线程池获取IP位置
+    location_results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_ip = {executor.submit(get_ip_location, ip): ip for ip in ip_set}
+        for future in concurrent.futures.as_completed(future_to_ip):
+            try:
+                ip, country = future.result()
+                location_results[ip] = country
+            except Exception as e:
+                print(f"获取位置信息时出错: {e}")
+    
+    # 写入文件
+    with open('ip.txt', 'w', encoding='utf-8') as f:
+        for ip in sorted(location_results.keys()):
+            f.write(f"{ip} ({location_results[ip]})\n")
+    
+    # 添加Git操作
+    os.system('git config --global user.email "tianshideyou@proton.me"')
+    os.system('git config --global user.name "IP Automation"')
+    os.system('git pull origin main')  # 关键：拉取远程更改
+    os.system('git add ip.txt')
+    os.system('git commit -m "Automatic update"')
+    push_result = os.system('git push origin main')
+    
+    if push_result == 0:
+        print("成功推送到仓库")
+    else:
+        print("推送失败")
+    
+    elapsed_time = time.time() - start_time
+    print(f"完成! 共处理 {len(ip_set)} 个唯一IP，用时: {elapsed_time:.2f}秒")
 
-        if 'text/html' in response.headers['Content-Type']:
-            process_html(response.text)
-        else:
-            ips = extract_ips_from_text(response.text)
-            ip_set.update(ips)
-
-    except requests.exceptions.RequestException as e:
-        print(f"请求失败: {url}，错误: {e}")
-    except Exception as e:
-        print(f"处理 URL 时出错: {url}，错误: {e}")
-
-# 获取每个IP的位置信息并写入文件
-with open('ip.txt', 'w', encoding='utf-8') as f:
-    for ip in sorted(ip_set):
-        location = get_ip_location(ip)
-        f.write(f"{ip} ({location})\n")
-
-print(f"共提取到 {len(ip_set)} 个唯一IP及其所属国家代码，已保存至 ip.txt")
-
-
+if __name__ == '__main__':
+    main()
